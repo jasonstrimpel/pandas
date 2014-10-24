@@ -591,7 +591,7 @@ class Options(object):
     >>> all_data = aapl.get_all_data()
     """
 
-    _TABLE_LOC = {'calls': 9, 'puts': 13}
+    _TABLE_LOC = {'calls': 0, 'puts': 1}
 
     def __init__(self, symbol, data_source=None):
         """ Instantiates options_data with a ticker saved as symbol """
@@ -664,29 +664,18 @@ class Options(object):
     def _get_option_tables(self, expiry):
         root = self._get_option_page_from_yahoo(expiry)
         tables = self._parse_option_page_from_yahoo(root)
-        m1 = _two_char_month(expiry.month)
-        table_name = '_tables' + m1 + str(expiry.year)[-2:]
+        table_name = '_tables' + str(expiry)
         setattr(self, table_name, tables)
         return tables
 
     def _get_option_page_from_yahoo(self, expiry):
-
         url = self._OPTIONS_BASE_URL.format(sym=self.symbol)
-
-        m1 = _two_char_month(expiry.month)
-
-        # if this month use other url
-        if expiry.month == CUR_MONTH and expiry.year == CUR_YEAR:
-            url += '+Options'
-        else:
-            url += '&m={year}-{m1}'.format(year=expiry.year, m1=m1)
-
+        url += '&date={expiry}'.format(expiry=expiry)
         root = self._parse_url(url)
         return root
 
     def _parse_option_page_from_yahoo(self, root):
-
-        tables = root.xpath('.//table')
+        tables = root.xpath('//*[@id="optionsCallsTable"]/div[2]/div/table')
         ntables = len(tables)
         if ntables == 0:
             raise RemoteDataError("No tables found")
@@ -720,7 +709,7 @@ class Options(object):
 
 
     def _get_option_data(self, month, year, expiry, name):
-        year, month, expiry = self._try_parse_dates(year, month, expiry)
+        # year, month, expiry = self._try_parse_dates(year, month, expiry)
         m1 = _two_char_month(month)
         table_name = '_tables' + m1 + str(year)[-2:]
 
@@ -1103,32 +1092,23 @@ class Options(object):
         to_ret = to_ret[to_ret].index
 
         try:
-            months = self.months
+            expirations = self.expirations
         except AttributeError:
-            months = self._get_expiry_months()
+            expirations = self._get_expiry_timestamps()
 
         all_data = []
 
         for name in to_ret:
 
-            for month in months:
-                m2 = month.month
-                y2 = month.year
-
-                m1 = _two_char_month(m2)
-                nam = name + str(m1) + str(y2)[2:]
-
-                try:  # Try to access on the instance
-                    frame = getattr(self, nam)
-                except AttributeError:
-                    meth_name = 'get_{0}_data'.format(name[:-1])
-                    frame = getattr(self, meth_name)(expiry=month)
+            for expiry in expirations:
+                meth_name = 'get_{0}_data'.format(name[:-1])
+                frame = getattr(self, meth_name)(expiry=expiry)
 
                 all_data.append(frame)
 
         return concat(all_data).sortlevel()
 
-    def _get_expiry_months(self):
+    def _get_expiry_timestamps(self):
         """
         Gets available expiry months.
 
@@ -1141,25 +1121,15 @@ class Options(object):
         root = self._parse_url(url)
 
         try:
-            links = root.xpath('.//*[@id="yfncsumtab"]')[0].xpath('.//a')
+            options = root.xpath('.//*[@id="options_menu"]')[0].xpath('.//option')
         except IndexError:
             raise RemoteDataError('Expiry months not available')
 
-        month_gen = (element.attrib['href'].split('=')[-1]
-                 for element in links
-                 if '/q/op?s=' in element.attrib['href']
-                 and '&m=' in element.attrib['href'])
+        expirations = [int(el.attrib['value']) for el in options]
 
-        months = [dt.date(int(month.split('-')[0]),
-                         int(month.split('-')[1]), 1)
-                 for month in month_gen]
+        self.expirations = expirations
 
-        current_month_text = root.xpath('.//*[@id="yfncsumtab"]')[0].xpath('.//strong')[0].text
-        current_month = dt.datetime.strptime(current_month_text, '%b %y')
-        months.insert(0, current_month)
-        self.months = months
-
-        return months
+        return expirations
 
     def _parse_url(self, url):
         """
